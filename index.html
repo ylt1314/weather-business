@@ -1179,6 +1179,39 @@
         未来 30 天矩阵会尽可能展示长周期趋势；天气服务逐日预报覆盖范围以接口实时返回为准，超出部分将明确标记为趋势估算，请以临近预报为准。
       </div>
 
+      <!-- 全国七大区域未来天气预报文字简报（简洁版：直达区域、城市、时间节点与升降温极值） -->
+      <div id="regionWeatherBriefingPanel" class="rounded-2xl border border-white/15 bg-slate-950/20 p-3.5 sm:p-4 space-y-2.5">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-newspaper text-amber-300 text-xs"></i>
+            <h3 class="text-xs sm:text-sm font-extrabold text-white">
+              未来 <span id="regionBriefingDaysLabel" class="text-amber-300">15</span> 天区域天气简报
+            </h3>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button id="copyRegionBriefingBtn" type="button" class="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-[11px] font-bold text-white transition flex items-center gap-1">
+              <i class="fa-regular fa-copy text-cyan-300"></i>
+              <span>复制简报</span>
+            </button>
+            <button id="toggleRegionBriefingBtn" type="button" class="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-[11px] font-bold text-white/85 transition" aria-expanded="true">
+              收起
+            </button>
+          </div>
+        </div>
+
+        <div id="regionBriefingBody" class="space-y-2">
+          <div id="regionBriefingOverview" class="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-4 text-[11px] bg-white/5 border border-white/10 rounded-xl px-3 py-2">
+            <span id="regionBriefingCoolingSummary" class="text-sky-200"><i class="fa-solid fa-temperature-arrow-down text-sky-300 mr-1"></i>正在汇总降温节点...</span>
+            <span class="hidden sm:inline text-white/20">|</span>
+            <span id="regionBriefingWarmingSummary" class="text-amber-200"><i class="fa-solid fa-temperature-arrow-up text-amber-300 mr-1"></i>正在汇总升温节点...</span>
+          </div>
+
+          <div id="regionBriefingList" class="grid grid-cols-1 lg:grid-cols-2 gap-2 text-xs text-white/90">
+            <div class="text-white/55 text-xs py-1">正在生成分区域城市简报...</div>
+          </div>
+        </div>
+      </div>
+
       <div class="region-matrix-shell">
         <table class="region-weather-table" id="regionWeatherMatrix">
           <thead id="regionWeatherMatrixHead"></thead>
@@ -1208,6 +1241,16 @@
             <span class="text-[10px] text-white/45">单位：<span class="chartUnitLabel">°C</span></span>
           </div>
           <div class="relative h-64 sm:h-72"><canvas id="regionTrendChart"></canvas></div>
+        </div>
+
+        <div class="rounded-2xl border border-white/10 bg-slate-950/10 p-3 sm:p-4 space-y-3">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <h4 id="regionCitiesTrendCaption" class="text-xs font-bold text-white/80">区域各城市气温趋势小序列折线图</h4>
+            <span class="text-[10px] text-white/45 shrink-0">每行 3 个城市 · 单位：<span class="chartUnitLabel">°C</span></span>
+          </div>
+          <div id="regionCitiesSmallMultiplesGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            <div class="text-xs text-white/50 py-4 col-span-full text-center">正在加载区域各城市气温小序列折线图...</div>
+          </div>
         </div>
 
       </div>
@@ -2542,6 +2585,7 @@
       regionForecastRequested: false,
       regionForecastLoadedCount: 0,
       regionTrendChartInstance: null,
+      regionCitiesChartInstances: [],
       currentUser: null,  // 当前登录账号
       isLoggedIn: false,  // 登录状态标识
       historicalData: null,
@@ -4548,7 +4592,10 @@
 
       body.querySelectorAll('[data-select-region-province]').forEach(button => {
         button.addEventListener('click', () => {
-          state.regionSelectedProvince = button.getAttribute('data-select-region-province');
+          const provName = button.getAttribute('data-select-region-province');
+          state.regionSelectedProvince = provName;
+          const parentGroup = REGIONAL_FORECAST_GROUPS.find(g => g.provinces.includes(provName));
+          if (parentGroup) state.regionTrendGroup = parentGroup.name;
           renderRegionForecastMatrix();
         });
       });
@@ -4559,7 +4606,162 @@
           renderRegionForecastMatrix();
         });
       });
+      renderRegionalWeatherBriefing();
       renderRegionalTrendDetail();
+    }
+
+    function analyzeProvinceTempTransitions(provinceName, daysCount) {
+      const daily = (state.regionForecastCache[provinceName]?.daily || []).slice(0, daysCount);
+      if (daily.length < 2) return null;
+      const province = CHINA_PROVINCES.find(p => p.name === provinceName);
+      const cityName = province?.capital || provinceName;
+
+      let minDay = null;
+      let maxDay = null;
+      let bestDrop = null;
+      let bestRise = null;
+
+      let runningHighMin = Number.isFinite(daily[0].minTemp) ? daily[0].minTemp : null;
+      let runningLowMax = Number.isFinite(daily[0].maxTemp) ? daily[0].maxTemp : null;
+
+      daily.forEach((d, idx) => {
+        if (Number.isFinite(d.minTemp)) {
+          if (!minDay || d.minTemp < minDay.minTemp) minDay = d;
+          if (idx > 0 && runningHighMin !== null) {
+            const drop = runningHighMin - d.minTemp;
+            if (!bestDrop || drop > bestDrop.delta) {
+              bestDrop = { delta: drop, day: d, targetTemp: d.minTemp };
+            }
+          }
+          if (runningHighMin === null || d.minTemp > runningHighMin) runningHighMin = d.minTemp;
+        }
+        if (Number.isFinite(d.maxTemp)) {
+          if (!maxDay || d.maxTemp > maxDay.maxTemp) maxDay = d;
+          if (idx > 0 && runningLowMax !== null) {
+            const rise = d.maxTemp - runningLowMax;
+            if (!bestRise || rise > bestRise.delta) {
+              bestRise = { delta: rise, day: d, targetTemp: d.maxTemp };
+            }
+          }
+          if (runningLowMax === null || d.maxTemp < runningLowMax) runningLowMax = d.maxTemp;
+        }
+      });
+
+      if (!minDay && !maxDay) return null;
+      return {
+        provinceName,
+        cityName,
+        minDay,
+        maxDay,
+        bestDrop,
+        bestRise
+      };
+    }
+
+    function renderRegionalWeatherBriefing() {
+      const daysEl = document.getElementById('regionBriefingDaysLabel');
+      const coolEl = document.getElementById('regionBriefingCoolingSummary');
+      const warmEl = document.getElementById('regionBriefingWarmingSummary');
+      const listEl = document.getElementById('regionBriefingList');
+      if (!coolEl || !warmEl || !listEl) return;
+
+      const daysCount = state.currentRange || 15;
+      if (daysEl) daysEl.textContent = String(daysCount);
+      const unitSym = `°${state.unit}`;
+
+      const targetGroups = REGIONAL_FORECAST_GROUPS.filter(
+        g => state.regionFilter === '全部区域' || g.name === state.regionFilter
+      );
+
+      const allAnalyses = [];
+      const groupHtml = [];
+      const plainTextLines = [`【全国七大区域未来 ${daysCount} 天天气简报】`];
+
+      targetGroups.forEach(group => {
+        const items = group.provinces
+          .map(name => analyzeProvinceTempTransitions(name, daysCount))
+          .filter(Boolean);
+
+        if (!items.length) {
+          groupHtml.push(`
+            <div class="rounded-xl bg-white/5 border border-white/10 px-3 py-2 text-[11px] text-white/55">
+              <strong class="text-cyan-200 mr-1.5">${group.name}</strong>正在同步预报数据...
+            </div>
+          `);
+          return;
+        }
+
+        items.forEach(it => allAnalyses.push({ ...it, groupName: group.name }));
+
+        // 降温最明显城市 + 全区最低温城市
+        const coolingSorted = items
+          .filter(it => it.bestDrop && it.bestDrop.day)
+          .sort((a, b) => (b.bestDrop.delta - a.bestDrop.delta) || (a.minDay.minTemp - b.minDay.minTemp));
+        const coolCities = [...new Set(coolingSorted.slice(0, 2).map(c => c.cityName))].join('、');
+        const leadCool = coolingSorted[0];
+        const lowestInGroup = items.filter(it => it.minDay).sort((a, b) => a.minDay.minTemp - b.minDay.minTemp)[0];
+
+        // 升温最明显城市 + 全区最高温城市
+        const warmingSorted = items
+          .filter(it => it.bestRise && it.bestRise.day)
+          .sort((a, b) => (b.bestRise.delta - a.bestRise.delta) || (b.maxDay.maxTemp - a.maxDay.maxTemp));
+        const warmCities = [...new Set(warmingSorted.slice(0, 2).map(c => c.cityName))].join('、');
+        const leadWarm = warmingSorted[0];
+        const highestInGroup = items.filter(it => it.maxDay).sort((a, b) => b.maxDay.maxTemp - a.maxDay.maxTemp)[0];
+
+        const coolPart = leadCool
+          ? `${coolCities} ${leadCool.bestDrop.day.dateStr} 降至 ${convertTemp(leadCool.bestDrop.targetTemp)}${unitSym}` +
+            (lowestInGroup && lowestInGroup.cityName !== leadCool.cityName
+              ? `（最低 ${lowestInGroup.cityName} ${convertTemp(lowestInGroup.minDay.minTemp)}${unitSym}）`
+              : '')
+          : '气温平稳';
+
+        const warmPart = leadWarm
+          ? `${warmCities} ${leadWarm.bestRise.day.dateStr} 升至 ${convertTemp(leadWarm.bestRise.targetTemp)}${unitSym}` +
+            (highestInGroup && highestInGroup.cityName !== leadWarm.cityName
+              ? `（最高 ${highestInGroup.cityName} ${convertTemp(highestInGroup.maxDay.maxTemp)}${unitSym}）`
+              : `（最高 ${convertTemp(highestInGroup.maxDay.maxTemp)}${unitSym}）`)
+          : '高温平稳';
+
+        plainTextLines.push(`${group.name}：降温 ${coolPart}；升温 ${warmPart}`);
+        groupHtml.push(`
+          <div class="rounded-xl bg-white/5 border border-white/10 px-3 py-2 text-[11px] leading-relaxed flex items-start gap-2">
+            <span class="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-200 font-extrabold shrink-0">${group.name}</span>
+            <div class="min-w-0">
+              <span class="text-sky-300 font-bold">降温：</span><span>${coolPart}</span>
+              <span class="text-white/30 mx-1.5">·</span>
+              <span class="text-amber-300 font-bold">升温：</span><span>${warmPart}</span>
+            </div>
+          </div>
+        `);
+      });
+
+      if (!allAnalyses.length) {
+        coolEl.innerHTML = '<i class="fa-solid fa-temperature-arrow-down text-sky-300 mr-1"></i>正在汇总降温节点...';
+        warmEl.innerHTML = '<i class="fa-solid fa-temperature-arrow-up text-amber-300 mr-1"></i>正在汇总升温节点...';
+        listEl.innerHTML = groupHtml.join('');
+        state.regionBriefingPlainText = '';
+        return;
+      }
+
+      const coldest = allAnalyses.filter(a => a.minDay).sort((a, b) => a.minDay.minTemp - b.minDay.minTemp)[0];
+      const topDrop = allAnalyses.filter(a => a.bestDrop?.day).sort((a, b) => b.bestDrop.delta - a.bestDrop.delta)[0];
+      const hottest = allAnalyses.filter(a => a.maxDay).sort((a, b) => b.maxDay.maxTemp - a.maxDay.maxTemp)[0];
+      const topRise = allAnalyses.filter(a => a.bestRise?.day).sort((a, b) => b.bestRise.delta - a.bestRise.delta)[0];
+
+      const coolSummary = topDrop && coldest
+        ? `${topDrop.groupName}·${topDrop.cityName} ${topDrop.bestDrop.day.dateStr} 降温明显（最低 ${coldest.groupName}·${coldest.cityName} ${coldest.minDay.dateStr} 降至 ${convertTemp(coldest.minDay.minTemp)}${unitSym}）`
+        : '各区域降温平缓';
+      const warmSummary = topRise && hottest
+        ? `${topRise.groupName}·${topRise.cityName} ${topRise.bestRise.day.dateStr} 升温明显（最高 ${hottest.groupName}·${hottest.cityName} ${hottest.maxDay.dateStr} 达 ${convertTemp(hottest.maxDay.maxTemp)}${unitSym}）`
+        : '各区域高温平稳';
+
+      coolEl.innerHTML = `<i class="fa-solid fa-temperature-arrow-down text-sky-300 mr-1"></i><strong>降温焦点：</strong>${coolSummary}`;
+      warmEl.innerHTML = `<i class="fa-solid fa-temperature-arrow-up text-amber-300 mr-1"></i><strong>升温焦点：</strong>${warmSummary}`;
+
+      plainTextLines.splice(1, 0, `降温焦点：${coolSummary}`, `升温焦点：${warmSummary}`);
+      listEl.innerHTML = groupHtml.join('');
+      state.regionBriefingPlainText = plainTextLines.join('\n');
     }
 
     function getRegionalAggregateDaily(group) {
@@ -4690,6 +4892,206 @@
         }
       }
 
+      renderRegionalCitiesTrendChart(group, metric);
+    }
+
+    function renderRegionalCitiesTrendChart(group, metric) {
+      const gridEl = document.getElementById('regionCitiesSmallMultiplesGrid');
+      const captionEl = document.getElementById('regionCitiesTrendCaption');
+      if (!gridEl || !group) return;
+
+      const isMin = metric === 'min';
+      const isBoth = metric === 'both';
+      const tempField = isMin ? 'minTemp' : 'maxTemp';
+      const metricLabel = isBoth ? '最高 / 最低温' : (isMin ? '日最低温' : '日最高温');
+      const daysCount = state.currentRange || 15;
+
+      if (captionEl) {
+        captionEl.textContent = `【${group.name}】各城市未来 ${daysCount} 天${metricLabel}小序列折线图`;
+      }
+
+      if (Array.isArray(state.regionCitiesChartInstances)) {
+        state.regionCitiesChartInstances.forEach(inst => {
+          try { inst.destroy(); } catch (_) {}
+        });
+      }
+      state.regionCitiesChartInstances = [];
+
+      const cityPalette = ['#fbbf24', '#38bdf8', '#34d399', '#fb7185', '#a78bfa', '#f97316', '#2dd4bf'];
+      const seriesList = group.provinces.map((provName, idx) => {
+        const prov = CHINA_PROVINCES.find(p => p.name === provName);
+        const cityName = prov?.capital || provName;
+        const daily = (state.regionForecastCache[provName]?.daily || []).slice(0, daysCount);
+        return {
+          provName,
+          cityName,
+          color: cityPalette[idx % cityPalette.length],
+          daily
+        };
+      }).filter(s => s.daily.length > 0);
+
+      if (!seriesList.length) {
+        gridEl.innerHTML = '<div class="text-xs text-white/50 py-4 col-span-full text-center">正在获取该区域各城市逐日预报数据...</div>';
+        return;
+      }
+
+      gridEl.innerHTML = '';
+
+      seriesList.forEach((s, idx) => {
+        // 水平轴日期保持 mm/dd 格式，不带星期几
+        const labels = s.daily.map(d => {
+          const parts = String(d.date || '').split('-');
+          if (parts.length >= 3) {
+            return `${parts[1]}/${parts[2]}`;
+          }
+          return String(d.dateStr || '');
+        });
+        const fullDates = s.daily.map(d => d.date || d.dateStr || '');
+
+        const valsMax = s.daily.map(d => Number.isFinite(d.maxTemp) ? convertTemp(d.maxTemp) : null).filter(v => v !== null);
+        const valsMin = s.daily.map(d => Number.isFinite(d.minTemp) ? convertTemp(d.minTemp) : null).filter(v => v !== null);
+        const cityHigh = valsMax.length ? `${Math.max(...valsMax)}°` : '—';
+        const cityLow = valsMin.length ? `${Math.min(...valsMin)}°` : '—';
+
+        const card = document.createElement('div');
+        card.className = 'rounded-xl border border-white/15 bg-white/[0.04] p-3 space-y-2';
+        card.innerHTML = `
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="w-2 h-2 rounded-full shrink-0" style="background:${s.color}"></span>
+              <span class="text-xs font-extrabold text-white truncate">${s.cityName}</span>
+              <span class="text-[10px] text-white/45 truncate">${s.provName !== s.cityName ? s.provName : ''}</span>
+            </div>
+            <span class="text-[10px] font-bold text-white/70 shrink-0">${cityLow} ~ ${cityHigh}</span>
+          </div>
+          <div class="relative h-44"><canvas id="regionCityMiniChart_${idx}"></canvas></div>
+        `;
+        gridEl.appendChild(card);
+
+        const canvas = card.querySelector('canvas');
+        if (!canvas || typeof Chart === 'undefined') return;
+
+        const datasets = isBoth
+          ? [
+              {
+                label: '最高温',
+                data: s.daily.map(d => Number.isFinite(d.maxTemp) ? Number(convertTemp(d.maxTemp).toFixed(1)) : null),
+                borderColor: '#f59e0b',
+                backgroundColor: 'rgba(245, 158, 11, 0.14)',
+                borderWidth: 2,
+                pointRadius: daysCount > 15 ? 1.8 : 2.8,
+                pointHoverRadius: 4.5,
+                pointBackgroundColor: '#f59e0b',
+                fill: false,
+                tension: 0.32,
+                spanGaps: true
+              },
+              {
+                label: '最低温',
+                data: s.daily.map(d => Number.isFinite(d.minTemp) ? Number(convertTemp(d.minTemp).toFixed(1)) : null),
+                borderColor: '#38bdf8',
+                backgroundColor: 'rgba(56, 189, 248, 0.14)',
+                borderWidth: 2,
+                pointRadius: daysCount > 15 ? 1.8 : 2.8,
+                pointHoverRadius: 4.5,
+                pointBackgroundColor: '#38bdf8',
+                fill: false,
+                tension: 0.32,
+                spanGaps: true
+              }
+            ]
+          : [
+              {
+                label: metricLabel,
+                data: s.daily.map(d => Number.isFinite(d[tempField]) ? Number(convertTemp(d[tempField]).toFixed(1)) : null),
+                borderColor: isMin ? '#38bdf8' : s.color,
+                backgroundColor: (isMin ? '#38bdf8' : s.color) + '22',
+                borderWidth: 2.2,
+                pointRadius: daysCount > 15 ? 1.8 : 3,
+                pointHoverRadius: 4.5,
+                pointBackgroundColor: isMin ? '#38bdf8' : s.color,
+                fill: true,
+                tension: 0.32,
+                spanGaps: true
+              }
+            ];
+
+        const ctx = canvas.getContext('2d');
+        const chartInst = new Chart(ctx, {
+          type: 'line',
+          data: { labels, datasets },
+          plugins: [{
+            id: `miniCityLabels_${idx}`,
+            afterDatasetsDraw(chart) {
+              const c = chart.ctx;
+              const area = chart.chartArea;
+              if (!area) return;
+              c.save();
+              c.font = '700 9px sans-serif';
+              c.textAlign = 'center';
+              c.textBaseline = 'middle';
+              const step = daysCount > 20 ? 3 : (daysCount > 10 ? 2 : 1);
+              chart.data.datasets.forEach((dataset, di) => {
+                const meta = chart.getDatasetMeta(di);
+                if (!meta || !meta.data) return;
+                meta.data.forEach((point, i) => {
+                  if (i % step !== 0 && i !== meta.data.length - 1) return;
+                  const value = dataset.data[i];
+                  if (value === null || value === undefined || !Number.isFinite(Number(value))) return;
+                  const yOffset = isBoth ? (di === 0 ? -9 : 11) : -9;
+                  const drawY = Math.max(area.top + 8, Math.min(area.bottom - 8, point.y + yOffset));
+                  const txt = `${Math.round(Number(value))}°`;
+                  c.lineWidth = 2.6;
+                  c.strokeStyle = 'rgba(15, 23, 42, 0.88)';
+                  c.strokeText(txt, point.x, drawY);
+                  c.fillStyle = dataset.borderColor;
+                  c.fillText(txt, point.x, drawY);
+                });
+              });
+              c.restore();
+            }
+          }],
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            layout: { padding: { top: 16, bottom: 8, left: 4, right: 6 } },
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  title: items => {
+                    const i = items?.[0]?.dataIndex ?? 0;
+                    return fullDates[i] || items?.[0]?.label || '';
+                  },
+                  label: context => ` ${s.cityName} ${context.dataset.label}：${context.parsed.y}°${state.unit}`
+                }
+              }
+            },
+            scales: {
+              x: {
+                ticks: {
+                  color: 'rgba(255,255,255,.55)',
+                  font: { size: 9 },
+                  maxTicksLimit: 5,
+                  maxRotation: 0
+                },
+                grid: { color: 'rgba(255,255,255,.045)' }
+              },
+              y: {
+                ticks: {
+                  color: 'rgba(255,255,255,.5)',
+                  font: { size: 9 },
+                  maxTicksLimit: 5,
+                  callback: value => `${value}°`
+                },
+                grid: { color: 'rgba(255,255,255,.065)' }
+              }
+            }
+          }
+        });
+        state.regionCitiesChartInstances.push(chartInst);
+      });
     }
 
     function setupRegionForecastControls() {
@@ -4746,6 +5148,44 @@
         renderRegionForecastMatrix();
         showToast('区域天气矩阵已同时显示最高温与最低温', 'info');
       });
+
+      const toggleBriefingBtn = document.getElementById('toggleRegionBriefingBtn');
+      const briefingBody = document.getElementById('regionBriefingBody');
+      if (toggleBriefingBtn && briefingBody) {
+        toggleBriefingBtn.addEventListener('click', () => {
+          const isHidden = briefingBody.classList.toggle('hidden');
+          toggleBriefingBtn.textContent = isHidden ? '展开' : '收起';
+          toggleBriefingBtn.setAttribute('aria-expanded', String(!isHidden));
+        });
+      }
+
+      const copyBriefingBtn = document.getElementById('copyRegionBriefingBtn');
+      if (copyBriefingBtn) {
+        copyBriefingBtn.addEventListener('click', async () => {
+          const text = state.regionBriefingPlainText;
+          if (!text) {
+            showToast('简报数据正在载入，请稍后再复制', 'warn');
+            return;
+          }
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              await navigator.clipboard.writeText(text);
+            } else {
+              const ta = document.createElement('textarea');
+              ta.value = text;
+              ta.style.position = 'fixed';
+              ta.style.opacity = '0';
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand('copy');
+              document.body.removeChild(ta);
+            }
+            showToast('已复制七大区域未来天气文字简报', 'success');
+          } catch (e) {
+            showToast('复制失败，请手动选中简报文本复制', 'warn');
+          }
+        });
+      }
     }
 
     // 渲染实时天气 Hero 卡片
