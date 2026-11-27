@@ -2585,6 +2585,10 @@
     const ADMIN_CREDENTIALS = {
       '10086': { password: '202788', role: '系统管理员' }
     };
+    // 预设子账号（无添加/管理账号权限）
+    const SUB_ACCOUNT_CREDENTIALS = {
+      'Camel-TQ': { password: '888888', role: '子账号' }
+    };
     const CUSTOM_ACCOUNTS_STORAGE_KEY = 'retail_weather_custom_accounts_v1';
 
     function loadCustomAccounts() {
@@ -8707,13 +8711,14 @@
       const accountSelect = document.getElementById('loginAccountSelect');
       const countHint = document.getElementById('accountCountHint');
       const customAccounts = loadCustomAccounts();
-      const customKeys = Object.keys(customAccounts).filter(k => k !== ADMIN_ACCOUNT_ID);
-      const totalCount = 1 + customKeys.length;
+      const subKeys = Object.keys(SUB_ACCOUNT_CREDENTIALS);
+      const customKeys = Object.keys(customAccounts).filter(
+        k => k !== ADMIN_ACCOUNT_ID && !SUB_ACCOUNT_CREDENTIALS[k]
+      );
+      const totalCount = 1 + subKeys.length + customKeys.length;
 
       if (countHint) {
-        countHint.textContent = customKeys.length > 0
-          ? `共 ${totalCount} 个可用账号`
-          : '请选择授权账号登录';
+        countHint.textContent = `共 ${totalCount} 个可用账号`;
       }
 
       if (!accountSelect) return;
@@ -8730,6 +8735,15 @@
       adminOpt.textContent = `${ADMIN_ACCOUNT_ID}-${ADMIN_CREDENTIALS[ADMIN_ACCOUNT_ID].role}`;
       accountSelect.appendChild(adminOpt);
 
+      // 预设子账号（无添加账号权限）
+      subKeys.forEach((subKey) => {
+        const subRec = SUB_ACCOUNT_CREDENTIALS[subKey];
+        const opt = document.createElement('option');
+        opt.value = subKey;
+        opt.textContent = `${subKey}（${subRec.role}）`;
+        accountSelect.appendChild(opt);
+      });
+
       // 管理员新增的自定义账号
       customKeys.forEach((accKey) => {
         const record = customAccounts[accKey];
@@ -8740,7 +8754,10 @@
         accountSelect.appendChild(opt);
       });
 
-      if (selectedAccount && (selectedAccount === ADMIN_ACCOUNT_ID || customAccounts[selectedAccount])) {
+      if (
+        selectedAccount &&
+        (selectedAccount === ADMIN_ACCOUNT_ID || SUB_ACCOUNT_CREDENTIALS[selectedAccount] || customAccounts[selectedAccount])
+      ) {
         accountSelect.value = selectedAccount;
       }
     }
@@ -8853,8 +8870,8 @@
         showRegFeedback('账号名称至少需要 2 个字符');
         return;
       }
-      if (account === ADMIN_ACCOUNT_ID) {
-        showRegFeedback('该账号为系统管理员保留账号，请更换其他名称');
+      if (account === ADMIN_ACCOUNT_ID || SUB_ACCOUNT_CREDENTIALS[account]) {
+        showRegFeedback('该账号为系统保留账号，请更换其他名称');
         return;
       }
       if (!password || password.length < 4) {
@@ -8922,7 +8939,7 @@
 
       const accountRecord = selectedAccount === ADMIN_ACCOUNT_ID
         ? ADMIN_CREDENTIALS[ADMIN_ACCOUNT_ID]
-        : customAccounts[selectedAccount];
+        : (SUB_ACCOUNT_CREDENTIALS[selectedAccount] || customAccounts[selectedAccount]);
 
       if (accountRecord && accountRecord.password === enteredPassword) {
         state.isLoggedIn = true;
