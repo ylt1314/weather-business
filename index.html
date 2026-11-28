@@ -4862,14 +4862,26 @@
               id: 'regionalTemperatureValueLabels',
               afterDatasetsDraw(chart) {
                 const c = chart.ctx;
-                c.save(); c.font = '10px sans-serif'; c.textAlign = 'center';
+                const area = chart.chartArea;
+                c.save();
+                c.font = '700 12px sans-serif';
+                c.textAlign = 'center';
+                c.textBaseline = 'middle';
                 chart.data.datasets.forEach((dataset, di) => {
                   const meta = chart.getDatasetMeta(di);
+                  const isMinSeries = (metric === 'min') || (metric === 'both' && di === 1);
                   meta.data.forEach((point, i) => {
                     const value = dataset.data[i];
                     if (value === null || value === undefined || !Number.isFinite(Number(value))) return;
-                    c.fillStyle = dataset.borderColor;
-                    c.fillText(`${Number(value).toFixed(1)}°`, point.x, point.y + (di === 0 ? -10 : 15));
+                    const yPos = area
+                      ? Math.max(area.top + 10, Math.min(area.bottom - 10, point.y + (di === 0 ? -12 : 14)))
+                      : (point.y + (di === 0 ? -12 : 14));
+                    const txt = `${Number(value).toFixed(1)}°`;
+                    c.lineWidth = 3;
+                    c.strokeStyle = 'rgba(15, 23, 42, 0.88)';
+                    c.strokeText(txt, point.x, yPos);
+                    c.fillStyle = isMinSeries ? '#ffffff' : dataset.borderColor;
+                    c.fillText(txt, point.x, yPos);
                   });
                 });
                 c.restore();
@@ -5027,24 +5039,25 @@
               const area = chart.chartArea;
               if (!area) return;
               c.save();
-              c.font = '700 9px sans-serif';
+              c.font = '700 11.5px sans-serif';
               c.textAlign = 'center';
               c.textBaseline = 'middle';
               const step = daysCount > 20 ? 3 : (daysCount > 10 ? 2 : 1);
               chart.data.datasets.forEach((dataset, di) => {
                 const meta = chart.getDatasetMeta(di);
                 if (!meta || !meta.data) return;
+                const isMinSeries = (isBoth && di === 1) || isMin;
                 meta.data.forEach((point, i) => {
                   if (i % step !== 0 && i !== meta.data.length - 1) return;
                   const value = dataset.data[i];
                   if (value === null || value === undefined || !Number.isFinite(Number(value))) return;
-                  const yOffset = isBoth ? (di === 0 ? -9 : 11) : -9;
-                  const drawY = Math.max(area.top + 8, Math.min(area.bottom - 8, point.y + yOffset));
+                  const yOffset = isBoth ? (di === 0 ? -11 : 13) : -11;
+                  const drawY = Math.max(area.top + 9, Math.min(area.bottom - 9, point.y + yOffset));
                   const txt = `${Math.round(Number(value))}°`;
-                  c.lineWidth = 2.6;
-                  c.strokeStyle = 'rgba(15, 23, 42, 0.88)';
+                  c.lineWidth = 3;
+                  c.strokeStyle = 'rgba(15, 23, 42, 0.9)';
                   c.strokeText(txt, point.x, drawY);
-                  c.fillStyle = dataset.borderColor;
+                  c.fillStyle = isMinSeries ? '#ffffff' : dataset.borderColor;
                   c.fillText(txt, point.x, drawY);
                 });
               });
